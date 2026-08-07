@@ -16,6 +16,7 @@
 package org.traccar.config;
 
 import org.traccar.BaseProtocol;
+import org.traccar.protocol.Ais140Protocol;
 import org.traccar.protocol.AdmProtocol;
 import org.traccar.protocol.AisProtocol;
 import org.traccar.protocol.AlematicsProtocol;
@@ -466,6 +467,7 @@ public class PortConfigSuffix extends ConfigSuffix<Integer> {
         put(SviasProtocol.class, 5168);
         put(EsealProtocol.class, 5169);
         put(FreematicsProtocol.class, 5170);
+        put(Ais140Protocol.class, 5270);
         put(AvemaProtocol.class, 5171);
         put(AutoTrackProtocol.class, 5172);
         put(TekProtocol.class, 5173);
