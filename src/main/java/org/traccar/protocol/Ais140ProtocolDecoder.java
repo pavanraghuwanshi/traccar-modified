@@ -108,7 +108,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
 
     private Object decodeLocation(Channel channel, SocketAddress remoteAddress, String[] values) {
         if (values.length < AIS140_CP_MINIMUM_FIELDS) {
-            LOGGER.warn("AIS-140 CP rejected: expected at least {} fields, received {}", AIS140_CP_MINIMUM_FIELDS, values.length);
+            LOGGER.warn(
+                    "AIS-140 CP rejected: expected at least {} fields, received {}",
+                    AIS140_CP_MINIMUM_FIELDS,
+                    values.length);
             return null;
         }
         DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 7));
