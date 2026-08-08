@@ -296,11 +296,11 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set("mnc", integer(value(values, 30)));
         position.set("lac", value(values, 31));
         position.set("cell", value(values, 32));
-        
+
         position.set(Position.KEY_ALARM, ALARMS.get(value(values, 4)));
         position.set("packetStatus", value(values, 3));
         position.set("vehicleRegistration", value(values, 7));
-        
+
         position.set(Position.KEY_INPUT, value(values, 45));
         position.set(Position.KEY_OUTPUT, value(values, 46));
         position.set(Position.KEY_ODOMETER, decimal(value(values, 47)) * 1000);
@@ -338,8 +338,8 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
 
         if (("CP".equals(header) || "NMP".equals(header)) && "NR".equals(event)) {
             LOGGER.debug("AIS-140 position decoded: imei={}, status={}, valid={}, lat={}, lon={}, speedKnots={}",
-                    imei, "CP".equals(header) ? value(values, 6) : value(values, 3), position.getValid(), position.getLatitude(), position.getLongitude(),
-                    position.getSpeed());
+                    imei, "CP".equals(header) ? value(values, 6) : value(values, 3),
+                    position.getValid(), position.getLatitude(), position.getLongitude(), position.getSpeed());
         } else {
             LOGGER.info("AIS-140 packet decoded: imei={}, header={}, event={}, valid={}, lat={}, lon={}",
                     imei, header, event, position.getValid(), position.getLatitude(), position.getLongitude());
