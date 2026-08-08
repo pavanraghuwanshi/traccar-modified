@@ -250,7 +250,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set("ignitionInterval", integer(value(values, 7)));
         position.set("ignitionOffInterval", integer(value(values, 8)));
         position.set(Position.KEY_INPUT, value(values, 9));
-        
+
         if (values.length > 10) {
             String power = value(values, 10);
             if (power.contains("*")) {
