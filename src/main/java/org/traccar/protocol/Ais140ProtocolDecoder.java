@@ -233,6 +233,41 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         return position;
     }
 
+    private Object decodeHlp(Channel channel, SocketAddress remoteAddress, String[] values) {
+        if (values.length < 10) {
+            LOGGER.warn("AIS-140 HLP rejected: expected at least 10 fields, received {}", values.length);
+            return null;
+        }
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 3));
+        if (deviceSession == null) {
+            LOGGER.warn("AIS-140 HLP rejected: device not found for IMEI {}", value(values, 3));
+            return null;
+        }
+        Position position = lastPosition(deviceSession);
+        position.set(Position.KEY_BATTERY_LEVEL, integer(value(values, 4)));
+        position.set("lowBatteryThreshold", integer(value(values, 5)));
+        position.set("memoryPercent", integer(value(values, 6)));
+        position.set("ignitionInterval", integer(value(values, 7)));
+        position.set("ignitionOffInterval", integer(value(values, 8)));
+        position.set(Position.KEY_INPUT, value(values, 9));
+        
+        if (values.length > 10) {
+            String power = value(values, 10);
+            if (power.contains("*")) {
+                power = power.substring(0, power.indexOf('*'));
+            }
+            position.set(Position.KEY_POWER, decimal(power));
+        }
+        if (values.length > 11) {
+            String battery = value(values, 11);
+            if (battery.contains("*")) {
+                battery = battery.substring(0, battery.indexOf('*'));
+            }
+            position.set(Position.KEY_BATTERY, decimal(battery));
+        }
+        return position;
+    }
+
     private Object decodeLgn(Channel channel, SocketAddress remoteAddress, String[] values) {
         if (values.length < 9) {
             LOGGER.warn("AIS-140 login rejected: expected at least 9 fields, received {}", values.length);
@@ -328,7 +363,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "EPB" -> value(values, 3);
             case "HP" -> value(values, 4);
             case "NMP" -> value(values, 6);
-            case "LGN" -> value(values, 3);
+            case "LGN", "HLP" -> value(values, 3);
             default -> value(values, 2);
         };
         String event = "CP".equals(header) ? value(values, 4) : header;
@@ -366,6 +401,8 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             header = "LGN";
         } else if (firstField.startsWith("$NMP")) {
             header = "NMP";
+        } else if (firstField.startsWith("$HLP")) {
+            header = "HLP";
         }
 
         Object decoded = switch (header) {
@@ -374,6 +411,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "HP" -> decodeHealth(channel, remoteAddress, values);
             case "NMP" -> decodeNmp(channel, remoteAddress, values);
             case "LGN" -> decodeLgn(channel, remoteAddress, values);
+            case "HLP" -> decodeHlp(channel, remoteAddress, values);
             default -> decodeLogin(channel, remoteAddress, values);
         };
         logDecoded(header, values, decoded);
