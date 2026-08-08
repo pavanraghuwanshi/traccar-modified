@@ -233,6 +233,91 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         return position;
     }
 
+    private Object decodeLgn(Channel channel, SocketAddress remoteAddress, String[] values) {
+        if (values.length < 9) {
+            LOGGER.warn("AIS-140 login rejected: expected at least 9 fields, received {}", values.length);
+            return null;
+        }
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 3));
+        if (deviceSession == null) {
+            LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", value(values, 3));
+            return null;
+        }
+        Position position = lastPosition(deviceSession);
+        position.set("vehicleRegistration", value(values, 2));
+        position.set("firmware", value(values, 4));
+        position.set("protocolVersion", value(values, 5));
+        String lonHemisphere = value(values, 9);
+        if (lonHemisphere.contains("*")) {
+            lonHemisphere = lonHemisphere.substring(0, lonHemisphere.indexOf('*'));
+        }
+        setCoordinates(position, value(values, 6), value(values, 7), value(values, 8), lonHemisphere);
+        return position;
+    }
+
+    private Object decodeNmp(Channel channel, SocketAddress remoteAddress, String[] values) {
+        if (values.length < 15) {
+            LOGGER.warn("AIS-140 NMP rejected: expected at least 15 fields, received {}", values.length);
+            return null;
+        }
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 6));
+        if (deviceSession == null) {
+            LOGGER.warn("AIS-140 NMP rejected: device not found for IMEI {}", value(values, 6));
+            return null;
+        }
+        Position position = new Position(getProtocolName());
+        position.setDeviceId(deviceSession.getDeviceId());
+        position.setTime(parseUtc(value(values, 9), value(values, 10)));
+        position.setValid(enabled(value(values, 8)));
+        if (position.getValid()) {
+            String lonHemisphere = value(values, 14);
+            if (lonHemisphere.contains("*")) {
+                lonHemisphere = lonHemisphere.substring(0, lonHemisphere.indexOf('*'));
+            }
+            setCoordinates(position, value(values, 11), value(values, 12), value(values, 13), lonHemisphere);
+        } else {
+            getLastLocation(position, null);
+        }
+        position.setSpeed(UnitsConverter.knotsFromKph(decimal(value(values, 15))));
+        position.setCourse(decimal(value(values, 16)));
+        position.set(Position.KEY_SATELLITES, integer(value(values, 17)));
+        position.setAltitude(decimal(value(values, 18)));
+        position.set(Position.KEY_PDOP, decimal(value(values, 19)));
+        position.set(Position.KEY_HDOP, decimal(value(values, 20)));
+        position.set("operator", value(values, 21));
+        position.set(Position.KEY_IGNITION, enabled(value(values, 22)));
+        position.set("mainPower", enabled(value(values, 23)));
+        position.set(Position.KEY_POWER, decimal(value(values, 24)));
+        position.set(Position.KEY_BATTERY, decimal(value(values, 25)));
+        position.set("panic", enabled(value(values, 26)));
+        position.set("tamper", value(values, 27));
+        position.set(Position.KEY_RSSI, integer(value(values, 28)));
+        position.set("mcc", integer(value(values, 29)));
+        position.set("mnc", integer(value(values, 30)));
+        position.set("lac", value(values, 31));
+        position.set("cell", value(values, 32));
+        
+        position.set(Position.KEY_ALARM, ALARMS.get(value(values, 4)));
+        position.set("packetStatus", value(values, 3));
+        position.set("vehicleRegistration", value(values, 7));
+        
+        position.set(Position.KEY_INPUT, value(values, 45));
+        position.set(Position.KEY_OUTPUT, value(values, 46));
+        position.set(Position.KEY_ODOMETER, decimal(value(values, 47)) * 1000);
+        position.set(Position.KEY_INDEX, integer(value(values, 50)));
+
+        if (values.length > 51) {
+            String fuelAndChecksum = value(values, 51);
+            if (fuelAndChecksum.contains("*")) {
+                position.set("fuelData", fuelAndChecksum.substring(0, fuelAndChecksum.indexOf('*')));
+                position.set("checksum", fuelAndChecksum.substring(fuelAndChecksum.indexOf('*') + 1));
+            } else {
+                position.set("fuelData", fuelAndChecksum);
+            }
+        }
+        return position;
+    }
+
     private void logDecoded(String header, String[] values, Object decoded) {
         if (!(decoded instanceof Position position)) {
             return;
@@ -242,13 +327,18 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "CP" -> value(values, 7);
             case "EPB" -> value(values, 3);
             case "HP" -> value(values, 4);
+            case "NMP" -> value(values, 6);
+            case "LGN" -> value(values, 3);
             default -> value(values, 2);
         };
         String event = "CP".equals(header) ? value(values, 4) : header;
+        if ("NMP".equals(header)) {
+            event = value(values, 3);
+        }
 
-        if ("CP".equals(header) && "NR".equals(event)) {
+        if (("CP".equals(header) || "NMP".equals(header)) && "NR".equals(event)) {
             LOGGER.debug("AIS-140 position decoded: imei={}, status={}, valid={}, lat={}, lon={}, speedKnots={}",
-                    imei, value(values, 6), position.getValid(), position.getLatitude(), position.getLongitude(),
+                    imei, "CP".equals(header) ? value(values, 6) : value(values, 3), position.getValid(), position.getLatitude(), position.getLongitude(),
                     position.getSpeed());
         } else {
             LOGGER.info("AIS-140 packet decoded: imei={}, header={}, event={}, valid={}, lat={}, lon={}",
@@ -271,10 +361,19 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             return null;
         }
         String header = value(values, 1);
+        String firstField = value(values, 0);
+        if (firstField.startsWith("$LGN")) {
+            header = "LGN";
+        } else if (firstField.startsWith("$NMP")) {
+            header = "NMP";
+        }
+
         Object decoded = switch (header) {
             case "CP" -> decodeLocation(channel, remoteAddress, values);
             case "EPB" -> decodeEmergency(channel, remoteAddress, values);
             case "HP" -> decodeHealth(channel, remoteAddress, values);
+            case "NMP" -> decodeNmp(channel, remoteAddress, values);
+            case "LGN" -> decodeLgn(channel, remoteAddress, values);
             default -> decodeLogin(channel, remoteAddress, values);
         };
         logDecoded(header, values, decoded);
