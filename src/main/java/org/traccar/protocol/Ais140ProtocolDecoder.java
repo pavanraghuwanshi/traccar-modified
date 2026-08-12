@@ -10,6 +10,7 @@ import org.traccar.BaseProtocolDecoder;
 import org.traccar.Protocol;
 import org.traccar.helper.UnitsConverter;
 import org.traccar.model.Position;
+import org.traccar.NetworkMessage;
 import org.traccar.session.DeviceSession;
 
 import java.net.SocketAddress;
@@ -414,6 +415,11 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "HLP" -> decodeHlp(channel, remoteAddress, values);
             default -> decodeLogin(channel, remoteAddress, values);
         };
+
+        if (channel != null) {
+            channel.writeAndFlush(new NetworkMessage("$" + header + "ACK*\r\n", remoteAddress));
+        }
+
         logDecoded(header, values, decoded);
         return decoded;
     }
