@@ -416,8 +416,11 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             default -> decodeLogin(channel, remoteAddress, values);
         };
 
-        if (channel != null) {
-            channel.writeAndFlush(new NetworkMessage("$" + header + "ACK*\r\n", remoteAddress));
+        if (channel != null && "LGN".equals(header)) {
+            SimpleDateFormat dateFormat = new SimpleDateFormat("ddMMyyyyHHmmss");
+            dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
+            String response = "$LGN," + dateFormat.format(new Date()) + "*\r\n";
+            channel.writeAndFlush(new NetworkMessage(response, remoteAddress));
         }
 
         logDecoded(header, values, decoded);
