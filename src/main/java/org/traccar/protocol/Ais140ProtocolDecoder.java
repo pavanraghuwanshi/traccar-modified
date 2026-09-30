@@ -10,7 +10,6 @@ import org.traccar.BaseProtocolDecoder;
 import org.traccar.Protocol;
 import org.traccar.helper.UnitsConverter;
 import org.traccar.model.Position;
-import org.traccar.NetworkMessage;
 import org.traccar.session.DeviceSession;
 
 import java.net.SocketAddress;
@@ -93,7 +92,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         return position;
     }
 
-    private void setCoordinates(Position position, String latitude, String latitudeHemisphere,
+    private boolean setCoordinates(Position position, String latitude, String latitudeHemisphere,
             String longitude, String longitudeHemisphere) {
         double lat = decimal(latitude);
         double lon = decimal(longitude);
@@ -105,6 +104,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         }
         position.setLatitude(lat);
         position.setLongitude(lon);
+        return lat != 0.0 || lon != 0.0;
     }
 
     private Object decodeLocation(Channel channel, SocketAddress remoteAddress, String[] values) {
@@ -125,7 +125,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.setTime(parseUtc(value(values, 10), value(values, 11)));
         position.setValid(enabled(value(values, 9)));
         if (position.getValid()) {
-            setCoordinates(position, value(values, 12), value(values, 13), value(values, 14), value(values, 15));
+            if (!setCoordinates(position, value(values, 12), value(values, 13), value(values, 14), value(values, 15))) {
+                position.setValid(false);
+                getLastLocation(position, null);
+            }
         } else {
             getLastLocation(position, null);
         }
@@ -151,7 +154,11 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set(Position.KEY_ODOMETER, decimal(value(values, 49)) * 1000);
         position.set("fenceId", value(values, 50));
         position.set("fuelData", value(values, 51));
-        position.set("packetStatus", value(values, 6));
+        String packetStatus = value(values, 6);
+        position.set("packetStatus", packetStatus);
+        if ("H".equalsIgnoreCase(packetStatus)) {
+            position.set(Position.KEY_ARCHIVE, true);
+        }
         position.set("vehicleRegistration", value(values, 8));
         position.set("mainPower", enabled(value(values, 24)));
         position.set("panic", enabled(value(values, 27)));
@@ -180,7 +187,9 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             position.setTime(parseUtc(dateTime.substring(0, 8), dateTime.substring(8, 14)));
         }
         position.setValid("A".equalsIgnoreCase(value(values, 6)));
-        setCoordinates(position, value(values, 7), value(values, 8), value(values, 9), value(values, 10));
+        if (!setCoordinates(position, value(values, 7), value(values, 8), value(values, 9), value(values, 10))) {
+            position.setValid(false);
+        }
         position.setAltitude(decimal(value(values, 11)));
         position.setSpeed(UnitsConverter.knotsFromKph(decimal(value(values, 12))));
         position.set(Position.KEY_ODOMETER, decimal(value(values, 13)) * 1000);
@@ -188,7 +197,11 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             position.set(Position.KEY_ALARM, Position.ALARM_SOS);
         }
         position.set("emergencyState", value(values, 2));
-        position.set("packetStatus", value(values, 4));
+        String packetStatus = value(values, 4);
+        position.set("packetStatus", packetStatus);
+        if ("H".equalsIgnoreCase(packetStatus)) {
+            position.set(Position.KEY_ARCHIVE, true);
+        }
         position.set("gpsProvider", value(values, 14));
         position.set("vehicleRegistration", value(values, 15));
         return position;
@@ -230,7 +243,9 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set("vehicleRegistration", value(values, 1));
         position.set("firmware", value(values, 3));
         position.set("protocolVersion", value(values, 4));
-        setCoordinates(position, value(values, 5), value(values, 6), value(values, 7), value(values, 8));
+        if (!setCoordinates(position, value(values, 5), value(values, 6), value(values, 7), value(values, 8))) {
+            position.setValid(false);
+        }
         return position;
     }
 
@@ -287,7 +302,9 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         if (lonHemisphere.contains("*")) {
             lonHemisphere = lonHemisphere.substring(0, lonHemisphere.indexOf('*'));
         }
-        setCoordinates(position, value(values, 6), value(values, 7), value(values, 8), lonHemisphere);
+        if (!setCoordinates(position, value(values, 6), value(values, 7), value(values, 8), lonHemisphere)) {
+            position.setValid(false);
+        }
         return position;
     }
 
@@ -310,7 +327,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             if (lonHemisphere.contains("*")) {
                 lonHemisphere = lonHemisphere.substring(0, lonHemisphere.indexOf('*'));
             }
-            setCoordinates(position, value(values, 11), value(values, 12), value(values, 13), lonHemisphere);
+            if (!setCoordinates(position, value(values, 11), value(values, 12), value(values, 13), lonHemisphere)) {
+                position.setValid(false);
+                getLastLocation(position, null);
+            }
         } else {
             getLastLocation(position, null);
         }
@@ -334,7 +354,11 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set("cell", value(values, 32));
 
         position.set(Position.KEY_ALARM, ALARMS.get(value(values, 4)));
-        position.set("packetStatus", value(values, 3));
+        String packetStatus = value(values, 3);
+        position.set("packetStatus", packetStatus);
+        if ("H".equalsIgnoreCase(packetStatus)) {
+            position.set(Position.KEY_ARCHIVE, true);
+        }
         position.set("vehicleRegistration", value(values, 7));
 
         position.set(Position.KEY_INPUT, value(values, 45));
@@ -415,14 +439,6 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "HLP" -> decodeHlp(channel, remoteAddress, values);
             default -> decodeLogin(channel, remoteAddress, values);
         };
-
-        if (channel != null && "LGN".equals(header)) {
-            SimpleDateFormat dateFormat = new SimpleDateFormat("ddMMyyyyHHmmss");
-            dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
-            String response = "$LGN," + dateFormat.format(new Date()) + "*\r\n";
-            channel.writeAndFlush(new NetworkMessage(response, remoteAddress));
-        }
-
         logDecoded(header, values, decoded);
         return decoded;
     }

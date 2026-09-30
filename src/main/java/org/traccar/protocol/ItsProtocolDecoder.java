@@ -199,8 +199,13 @@ public class ItsProtocolDecoder extends BaseProtocolDecoder {
         if (parser.hasNext()) {
             position.setValid(parser.next().matches("[1A]"));
         }
-        position.setLatitude(parser.nextCoordinate(Parser.CoordinateFormat.DEG_HEM));
-        position.setLongitude(parser.nextCoordinate(Parser.CoordinateFormat.DEG_HEM));
+        double lat = parser.nextCoordinate(Parser.CoordinateFormat.DEG_HEM);
+        double lon = parser.nextCoordinate(Parser.CoordinateFormat.DEG_HEM);
+        position.setLatitude(lat);
+        position.setLongitude(lon);
+        if (lat == 0.0 && lon == 0.0) {
+            position.setValid(false);
+        }
 
         if (parser.hasNext(3)) {
             position.setSpeed(UnitsConverter.knotsFromKph(parser.nextDouble()));

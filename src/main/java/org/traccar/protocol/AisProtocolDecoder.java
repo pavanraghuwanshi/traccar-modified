@@ -76,8 +76,15 @@ public class AisProtocolDecoder extends BaseProtocolDecoder {
 
             position.setSpeed(buf.readUnsigned(10) / 10.0);
             position.setValid(buf.readUnsigned(1) != 0);
-            position.setLongitude(buf.readSigned(28) / 10000.0 / 60.0);
-            position.setLatitude(buf.readSigned(27) / 10000.0 / 60.0);
+            double longitude = buf.readSigned(28) / 10000.0 / 60.0;
+            double latitude = buf.readSigned(27) / 10000.0 / 60.0;
+
+            position.setLongitude(longitude);
+            position.setLatitude(latitude);
+
+            if ((latitude == 0.0 && longitude == 0.0) || latitude > 90.0 || latitude < -90.0 || longitude > 180.0 || longitude < -180.0) {
+                position.setValid(false);
+            }
             position.setCourse(buf.readUnsigned(12) / 10.0);
 
             position.set("heading", buf.readUnsigned(9));
