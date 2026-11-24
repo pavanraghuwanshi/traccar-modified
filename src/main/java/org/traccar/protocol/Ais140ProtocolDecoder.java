@@ -24,8 +24,8 @@ import java.util.TimeZone;
 public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Ais140ProtocolDecoder.class);
-    // Fields 0..52 are required through the checksum/end marker.
-    private static final int AIS140_CP_MINIMUM_FIELDS = 53;
+    // Fields 0..15 are required for basic location parsing.
+    private static final int AIS140_CP_MINIMUM_FIELDS = 15;
     private static final Map<String, String> ALARMS = new HashMap<>();
 
     static {
@@ -72,6 +72,27 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         return "1".equals(value);
     }
 
+    private static String cleanField(String val) {
+        if (val.contains("*")) {
+            val = val.substring(0, val.indexOf('*'));
+        }
+        return val.trim();
+    }
+
+    private String findImei(String[] values, int defaultIndex) {
+        String direct = value(values, defaultIndex);
+        if (direct.matches("\\d{15}")) {
+            return direct;
+        }
+        for (int i = 1; i < Math.min(values.length, 10); i++) {
+            String v = value(values, i);
+            if (v.matches("\\d{15}")) {
+                return v;
+            }
+        }
+        return direct;
+    }
+
     private static Date parseUtc(String date, String time) {
         if (date.length() != 8 || time.length() != 6) {
             return new Date();
@@ -103,8 +124,13 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         if ("W".equalsIgnoreCase(longitudeHemisphere)) {
             lon = -lon;
         }
-        position.setLatitude(lat);
-        position.setLongitude(lon);
+        if (lat == 0.0 && lon == 0.0) {
+            getLastLocation(position, null);
+            position.setValid(false);
+        } else {
+            position.setLatitude(lat);
+            position.setLongitude(lon);
+        }
     }
 
     private Object decodeLocation(Channel channel, SocketAddress remoteAddress, String[] values) {
@@ -115,9 +141,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
                     values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 7));
+        String imei = findImei(values, 7);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 CP rejected: device not found for IMEI {}", value(values, 7));
+            LOGGER.warn("AIS-140 CP rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = new Position(getProtocolName());
@@ -145,32 +172,102 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set(Position.KEY_BATTERY, decimal(value(values, 26)));
         position.set(Position.KEY_ALARM, ALARMS.get(value(values, 4)));
         position.set(Position.KEY_RSSI, integer(value(values, 29)));
-        position.set(Position.KEY_INPUT, value(values, 46));
-        position.set(Position.KEY_OUTPUT, value(values, 47));
-        position.set(Position.KEY_INDEX, integer(value(values, 48)));
-        position.set(Position.KEY_ODOMETER, decimal(value(values, 49)) * 1000);
-        position.set("fenceId", value(values, 50));
-        position.set("fuelData", value(values, 51));
-        position.set("packetStatus", value(values, 6));
+        String packetStatus = value(values, 6);
+        position.set("packetStatus", packetStatus);
+        if ("H".equalsIgnoreCase(packetStatus) || "02".equals(value(values, 5))) {
+            position.set(Position.KEY_ARCHIVE, true);
+        }
         position.set("vehicleRegistration", value(values, 8));
         position.set("mainPower", enabled(value(values, 24)));
         position.set("panic", enabled(value(values, 27)));
         position.set("tamper", value(values, 28));
-        String checksum = value(values, 52);
-        if (!checksum.isBlank() && !"?".equals(checksum)) {
-            position.set("checksum", checksum);
+
+        int inputIndex = -1;
+        for (int i = 34; i < values.length - 1; i++) {
+            if (value(values, i).matches("[01]{4}") && value(values, i + 1).matches("[01]{2}")) {
+                inputIndex = i;
+                break;
+            }
         }
+
+        if (inputIndex >= 0) {
+            position.set(Position.KEY_INPUT, value(values, inputIndex));
+            position.set(Position.KEY_OUTPUT, value(values, inputIndex + 1));
+            if (inputIndex + 2 < values.length) {
+                position.set(Position.KEY_INDEX, integer(value(values, inputIndex + 2)));
+            }
+            if (inputIndex + 3 < values.length) {
+                position.set(Position.KEY_ODOMETER, decimal(value(values, inputIndex + 3)) * 1000);
+            }
+            if (inputIndex + 4 < values.length) {
+                position.set("fenceId", value(values, inputIndex + 4));
+            }
+            if (inputIndex + 5 < values.length) {
+                String fuelAndChecksum = value(values, inputIndex + 5);
+                if (fuelAndChecksum.contains("*")) {
+                    position.set("fuelData", fuelAndChecksum.substring(0, fuelAndChecksum.indexOf('*')).trim());
+                    String chk = fuelAndChecksum.substring(fuelAndChecksum.indexOf('*') + 1).trim();
+                    if (!chk.isBlank() && !"?".equals(chk)) {
+                        position.set("checksum", chk);
+                    }
+                } else {
+                    position.set("fuelData", fuelAndChecksum.trim());
+                    if (inputIndex + 6 < values.length) {
+                        String chk = cleanField(value(values, inputIndex + 6));
+                        if (!chk.isBlank() && !"?".equals(chk)) {
+                            position.set("checksum", chk);
+                        }
+                    }
+                }
+            }
+        } else {
+            if (values.length > 46) {
+                position.set(Position.KEY_INPUT, value(values, 46));
+            }
+            if (values.length > 47) {
+                position.set(Position.KEY_OUTPUT, value(values, 47));
+            }
+            if (values.length > 48) {
+                position.set(Position.KEY_INDEX, integer(value(values, 48)));
+            }
+            if (values.length > 49) {
+                position.set(Position.KEY_ODOMETER, decimal(value(values, 49)) * 1000);
+            }
+            if (values.length > 50) {
+                position.set("fenceId", value(values, 50));
+            }
+            if (values.length > 51) {
+                String fuelAndChecksum = value(values, 51);
+                if (fuelAndChecksum.contains("*")) {
+                    position.set("fuelData", fuelAndChecksum.substring(0, fuelAndChecksum.indexOf('*')).trim());
+                    String chk = fuelAndChecksum.substring(fuelAndChecksum.indexOf('*') + 1).trim();
+                    if (!chk.isBlank() && !"?".equals(chk)) {
+                        position.set("checksum", chk);
+                    }
+                } else {
+                    position.set("fuelData", fuelAndChecksum.trim());
+                    if (values.length > 52) {
+                        String chk = cleanField(value(values, 52));
+                        if (!chk.isBlank() && !"?".equals(chk)) {
+                            position.set("checksum", chk);
+                        }
+                    }
+                }
+            }
+        }
+
         return position;
     }
 
     private Object decodeEmergency(Channel channel, SocketAddress remoteAddress, String[] values) {
-        if (values.length < 17) {
-            LOGGER.warn("AIS-140 EPB rejected: expected at least 17 fields, received {}", values.length);
+        if (values.length < 16) {
+            LOGGER.warn("AIS-140 EPB rejected: expected at least 16 fields, received {}", values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 3));
+        String imei = findImei(values, 3);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 EPB rejected: device not found for IMEI {}", value(values, 3));
+            LOGGER.warn("AIS-140 EPB rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = new Position(getProtocolName());
@@ -188,20 +285,25 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             position.set(Position.KEY_ALARM, Position.ALARM_SOS);
         }
         position.set("emergencyState", value(values, 2));
-        position.set("packetStatus", value(values, 4));
+        String packetStatus = value(values, 4);
+        position.set("packetStatus", packetStatus);
+        if ("SP".equalsIgnoreCase(packetStatus) || "H".equalsIgnoreCase(packetStatus)) {
+            position.set(Position.KEY_ARCHIVE, true);
+        }
         position.set("gpsProvider", value(values, 14));
         position.set("vehicleRegistration", value(values, 15));
         return position;
     }
 
     private Object decodeHealth(Channel channel, SocketAddress remoteAddress, String[] values) {
-        if (values.length < 13) {
-            LOGGER.warn("AIS-140 HP rejected: expected at least 13 fields, received {}", values.length);
+        if (values.length < 12) {
+            LOGGER.warn("AIS-140 HP rejected: expected at least 12 fields, received {}", values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 4));
+        String imei = findImei(values, 4);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 HP rejected: device not found for IMEI {}", value(values, 4));
+            LOGGER.warn("AIS-140 HP rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = lastPosition(deviceSession);
@@ -211,8 +313,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set("ignitionInterval", integer(value(values, 8)));
         position.set("ignitionOffInterval", integer(value(values, 9)));
         position.set(Position.KEY_INPUT, value(values, 10));
-        position.set(Position.KEY_POWER, decimal(value(values, 11)));
-        position.set(Position.KEY_BATTERY, decimal(value(values, 12)));
+        position.set(Position.KEY_POWER, decimal(cleanField(value(values, 11))));
+        if (values.length > 12) {
+            position.set(Position.KEY_BATTERY, decimal(cleanField(value(values, 12))));
+        }
         return position;
     }
 
@@ -221,16 +325,19 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 login rejected: expected at least 9 fields, received {}", values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 2));
+        String imei = findImei(values, 2);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", value(values, 2));
+            LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = lastPosition(deviceSession);
+        position.setTime(new Date());
+        position.setValid(true);
         position.set("vehicleRegistration", value(values, 1));
         position.set("firmware", value(values, 3));
         position.set("protocolVersion", value(values, 4));
-        setCoordinates(position, value(values, 5), value(values, 6), value(values, 7), value(values, 8));
+        setCoordinates(position, value(values, 5), value(values, 6), value(values, 7), cleanField(value(values, 8)));
         return position;
     }
 
@@ -239,9 +346,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 HLP rejected: expected at least 10 fields, received {}", values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 3));
+        String imei = findImei(values, 3);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 HLP rejected: device not found for IMEI {}", value(values, 3));
+            LOGGER.warn("AIS-140 HLP rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = lastPosition(deviceSession);
@@ -253,18 +361,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set(Position.KEY_INPUT, value(values, 9));
 
         if (values.length > 10) {
-            String power = value(values, 10);
-            if (power.contains("*")) {
-                power = power.substring(0, power.indexOf('*'));
-            }
-            position.set(Position.KEY_POWER, decimal(power));
+            position.set(Position.KEY_POWER, decimal(cleanField(value(values, 10))));
         }
         if (values.length > 11) {
-            String battery = value(values, 11);
-            if (battery.contains("*")) {
-                battery = battery.substring(0, battery.indexOf('*'));
-            }
-            position.set(Position.KEY_BATTERY, decimal(battery));
+            position.set(Position.KEY_BATTERY, decimal(cleanField(value(values, 11))));
         }
         return position;
     }
@@ -274,20 +374,19 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 login rejected: expected at least 9 fields, received {}", values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 3));
+        String imei = findImei(values, 3);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", value(values, 3));
+            LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = lastPosition(deviceSession);
+        position.setTime(new Date());
+        position.setValid(true);
         position.set("vehicleRegistration", value(values, 2));
         position.set("firmware", value(values, 4));
         position.set("protocolVersion", value(values, 5));
-        String lonHemisphere = value(values, 9);
-        if (lonHemisphere.contains("*")) {
-            lonHemisphere = lonHemisphere.substring(0, lonHemisphere.indexOf('*'));
-        }
-        setCoordinates(position, value(values, 6), value(values, 7), value(values, 8), lonHemisphere);
+        setCoordinates(position, value(values, 6), value(values, 7), value(values, 8), cleanField(value(values, 9)));
         return position;
     }
 
@@ -296,9 +395,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 NMP rejected: expected at least 15 fields, received {}", values.length);
             return null;
         }
-        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, value(values, 6));
+        String imei = findImei(values, 6);
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
-            LOGGER.warn("AIS-140 NMP rejected: device not found for IMEI {}", value(values, 6));
+            LOGGER.warn("AIS-140 NMP rejected: device not found for IMEI {}", imei);
             return null;
         }
         Position position = new Position(getProtocolName());
@@ -306,11 +406,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.setTime(parseUtc(value(values, 9), value(values, 10)));
         position.setValid(enabled(value(values, 8)));
         if (position.getValid()) {
-            String lonHemisphere = value(values, 14);
-            if (lonHemisphere.contains("*")) {
-                lonHemisphere = lonHemisphere.substring(0, lonHemisphere.indexOf('*'));
-            }
-            setCoordinates(position, value(values, 11), value(values, 12), value(values, 13), lonHemisphere);
+            setCoordinates(position, value(values, 11), value(values, 12), value(values, 13), cleanField(value(values, 14)));
         } else {
             getLastLocation(position, null);
         }
@@ -345,10 +441,10 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         if (values.length > 51) {
             String fuelAndChecksum = value(values, 51);
             if (fuelAndChecksum.contains("*")) {
-                position.set("fuelData", fuelAndChecksum.substring(0, fuelAndChecksum.indexOf('*')));
-                position.set("checksum", fuelAndChecksum.substring(fuelAndChecksum.indexOf('*') + 1));
+                position.set("fuelData", fuelAndChecksum.substring(0, fuelAndChecksum.indexOf('*')).trim());
+                position.set("checksum", fuelAndChecksum.substring(fuelAndChecksum.indexOf('*') + 1).trim());
             } else {
-                position.set("fuelData", fuelAndChecksum);
+                position.set("fuelData", fuelAndChecksum.trim());
             }
         }
         return position;
@@ -365,7 +461,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "HP" -> value(values, 4);
             case "NMP" -> value(values, 6);
             case "LGN", "HLP" -> value(values, 3);
-            default -> value(values, 2);
+            default -> findImei(values, 2);
         };
         String event = "CP".equals(header) ? value(values, 4) : header;
         if ("NMP".equals(header)) {
@@ -396,13 +492,20 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 packet rejected: header is missing");
             return null;
         }
-        String header = value(values, 1);
+
+        for (int i = 0; i < values.length; i++) {
+            values[i] = values[i].trim();
+        }
+
         String firstField = value(values, 0);
-        if (firstField.startsWith("$LGN")) {
+        String header = value(values, 1);
+        if (firstField.startsWith("$") && firstField.length() > 1) {
+            header = firstField.substring(1);
+        } else if ("$LGN".equals(firstField)) {
             header = "LGN";
-        } else if (firstField.startsWith("$NMP")) {
+        } else if ("$NMP".equals(firstField)) {
             header = "NMP";
-        } else if (firstField.startsWith("$HLP")) {
+        } else if ("$HLP".equals(firstField)) {
             header = "HLP";
         }
 
@@ -416,11 +519,28 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             default -> decodeLogin(channel, remoteAddress, values);
         };
 
-        if (channel != null && "LGN".equals(header)) {
-            SimpleDateFormat dateFormat = new SimpleDateFormat("ddMMyyyyHHmmss");
-            dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
-            String response = "$LGN," + dateFormat.format(new Date()) + "*\r\n";
-            channel.writeAndFlush(new NetworkMessage(response, remoteAddress));
+        if (channel != null) {
+            boolean isLogin = "LGN".equals(header) || (values.length <= 10
+                    && !"HP".equals(header) && !"EPB".equals(header));
+            if (isLogin) {
+                SimpleDateFormat dateFormat = new SimpleDateFormat("ddMMyyyyHHmmss");
+                dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
+                String response = "$LGN," + dateFormat.format(new Date()) + "*\r\n";
+                channel.writeAndFlush(new NetworkMessage(response, remoteAddress));
+            } else if ("CP".equals(header) || "EPB".equals(header)) {
+                if (decoded instanceof Position pos && pos.getAttributes().containsKey(Position.KEY_INDEX)) {
+                    int idx = (Integer) pos.getAttributes().get(Position.KEY_INDEX);
+                    if (idx > 0) {
+                        channel.writeAndFlush(new NetworkMessage("$ACK," + String.format("%06d", idx) + "*\r\n", remoteAddress));
+                    } else {
+                        channel.writeAndFlush(new NetworkMessage("$ACK*\r\n", remoteAddress));
+                    }
+                } else {
+                    channel.writeAndFlush(new NetworkMessage("$ACK*\r\n", remoteAddress));
+                }
+            } else if ("HP".equals(header) || "HLP".equals(header)) {
+                channel.writeAndFlush(new NetworkMessage("$ACK*\r\n", remoteAddress));
+            }
         }
 
         logDecoded(header, values, decoded);

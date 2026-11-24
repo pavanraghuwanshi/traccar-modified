@@ -32,7 +32,7 @@ public class MapmyIndiaGeocoder extends JsonGeocoder {
         if (!results.isEmpty()) {
             Address address = new Address();
 
-            JsonObject result = (JsonObject) results.getFirst();
+            JsonObject result = (JsonObject) results.get(0);
 
             if (result.containsKey("formatted_address")) {
                 address.setFormattedAddress(result.getString("formatted_address"));

@@ -88,52 +88,49 @@ public class MemoryStorage extends Storage {
         if (genericCondition == null) {
             return true;
         }
-        return switch (genericCondition) {
-            case Condition.Compare condition -> {
-                Object value = retrieveValue(object, condition.getColumn());
-                int result = ((Comparable) value).compareTo(condition.getValue());
-                yield switch (condition.getOperator()) {
-                    case "<" -> result < 0;
-                    case "<=" -> result <= 0;
-                    case ">" -> result > 0;
-                    case ">=" -> result >= 0;
-                    case "=" -> result == 0;
-                    default -> throw new RuntimeException("Unsupported comparison condition");
-                };
-            }
-            case Condition.Between condition -> {
-                Object fromValue = retrieveValue(object, condition.getColumn());
-                int fromResult = ((Comparable) fromValue).compareTo(condition.getFromValue());
-                Object toValue = retrieveValue(object, condition.getColumn());
-                int toResult = ((Comparable) toValue).compareTo(condition.getToValue());
-                yield fromResult >= 0 && toResult <= 0;
-            }
-            case Condition.Binary condition -> switch (condition.getOperator()) {
+        if (genericCondition instanceof Condition.Compare condition) {
+            Object value = retrieveValue(object, condition.getColumn());
+            int result = ((Comparable) value).compareTo(condition.getValue());
+            return switch (condition.getOperator()) {
+                case "<" -> result < 0;
+                case "<=" -> result <= 0;
+                case ">" -> result > 0;
+                case ">=" -> result >= 0;
+                case "=" -> result == 0;
+                default -> throw new RuntimeException("Unsupported comparison condition");
+            };
+        } else if (genericCondition instanceof Condition.Between condition) {
+            Object fromValue = retrieveValue(object, condition.getColumn());
+            int fromResult = ((Comparable) fromValue).compareTo(condition.getFromValue());
+            Object toValue = retrieveValue(object, condition.getColumn());
+            int toResult = ((Comparable) toValue).compareTo(condition.getToValue());
+            return fromResult >= 0 && toResult <= 0;
+        } else if (genericCondition instanceof Condition.Binary condition) {
+            return switch (condition.getOperator()) {
                 case "AND" -> checkCondition(condition.getFirst(), object)
                         && checkCondition(condition.getSecond(), object);
                 case "OR" -> checkCondition(condition.getFirst(), object)
                         || checkCondition(condition.getSecond(), object);
                 default -> false;
             };
-            case Condition.Permission condition -> checkPermission(condition, object);
-            case Condition.Contains condition -> {
-                String needle = condition.getValue().toLowerCase(Locale.ROOT);
-                yield condition.getColumns().stream().anyMatch(column -> {
-                    Object value = retrieveValue(object, column);
-                    return value != null && value.toString().toLowerCase(Locale.ROOT).contains(needle);
-                });
+        } else if (genericCondition instanceof Condition.Permission condition) {
+            return checkPermission(condition, object);
+        } else if (genericCondition instanceof Condition.Contains condition) {
+            String needle = condition.getValue().toLowerCase(Locale.ROOT);
+            return condition.getColumns().stream().anyMatch(column -> {
+                Object value = retrieveValue(object, column);
+                return value != null && value.toString().toLowerCase(Locale.ROOT).contains(needle);
+            });
+        } else if (genericCondition instanceof Condition.LatestPositions condition) {
+            long positionId = (Long) retrieveValue(object, "id");
+            long positionDeviceId = (Long) retrieveValue(object, "deviceId");
+            if (condition.getDeviceId() > 0 && positionDeviceId != condition.getDeviceId()) {
+                return false;
             }
-            case Condition.LatestPositions condition -> {
-                long positionId = (Long) retrieveValue(object, "id");
-                long positionDeviceId = (Long) retrieveValue(object, "deviceId");
-                if (condition.getDeviceId() > 0 && positionDeviceId != condition.getDeviceId()) {
-                    yield false;
-                }
-                yield objects.computeIfAbsent(Device.class, key -> new ConcurrentHashMap<>()).values().stream()
-                        .anyMatch(device -> (Long) retrieveValue(device, "positionId") == positionId);
-            }
-            default -> false;
-        };
+            return objects.computeIfAbsent(Device.class, key -> new ConcurrentHashMap<>()).values().stream()
+                    .anyMatch(device -> (Long) retrieveValue(device, "positionId") == positionId);
+        }
+        return false;
     }
 
     private boolean checkPermission(Condition.Permission condition, Object object) {

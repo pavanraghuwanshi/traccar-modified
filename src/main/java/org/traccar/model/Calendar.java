@@ -99,15 +99,19 @@ public class Calendar extends ExtendedModel {
     }
 
     private static Temporal convertToMatchingTemporal(Instant instant, Temporal sample, ZoneId overrideZone) {
-        return switch (sample) {
-            case LocalDate ignored -> instant.atZone(ZoneOffset.UTC).toLocalDate();
-            case LocalDateTime ignored -> instant.atZone(ZoneOffset.UTC).toLocalDateTime();
-            case ZonedDateTime zonedDateTime -> overrideZone != null
+        if (sample instanceof LocalDate) {
+            return instant.atZone(ZoneOffset.UTC).toLocalDate();
+        } else if (sample instanceof LocalDateTime) {
+            return instant.atZone(ZoneOffset.UTC).toLocalDateTime();
+        } else if (sample instanceof ZonedDateTime zonedDateTime) {
+            return overrideZone != null
                     ? instant.atZone(overrideZone).toLocalDateTime().atZone(zonedDateTime.getZone())
                     : instant.atZone(zonedDateTime.getZone());
-            case OffsetDateTime offsetDateTime -> instant.atOffset(offsetDateTime.getOffset());
-            default -> instant;
-        };
+        } else if (sample instanceof OffsetDateTime offsetDateTime) {
+            return instant.atOffset(offsetDateTime.getOffset());
+        } else {
+            return instant;
+        }
     }
 
     private static ZoneId resolveOverrideZone(VEvent event) {
@@ -119,16 +123,21 @@ public class Calendar extends ExtendedModel {
     }
 
     private static Instant temporalToInstant(Temporal temporal, ZoneId overrideZone) {
-        return switch (temporal) {
-            case ZonedDateTime zonedDateTime -> overrideZone != null
+        if (temporal instanceof ZonedDateTime zonedDateTime) {
+            return overrideZone != null
                     ? zonedDateTime.toLocalDateTime().atZone(overrideZone).toInstant()
                     : zonedDateTime.toInstant();
-            case OffsetDateTime offsetDateTime -> offsetDateTime.toInstant();
-            case LocalDateTime localDateTime -> localDateTime.toInstant(ZoneOffset.UTC);
-            case LocalDate localDate -> localDate.atStartOfDay(ZoneOffset.UTC).toInstant();
-            case Instant instantValue -> instantValue;
-            default -> throw new IllegalArgumentException("Unsupported Temporal type");
-        };
+        } else if (temporal instanceof OffsetDateTime offsetDateTime) {
+            return offsetDateTime.toInstant();
+        } else if (temporal instanceof LocalDateTime localDateTime) {
+            return localDateTime.toInstant(ZoneOffset.UTC);
+        } else if (temporal instanceof LocalDate localDate) {
+            return localDate.atStartOfDay(ZoneOffset.UTC).toInstant();
+        } else if (temporal instanceof Instant instantValue) {
+            return instantValue;
+        } else {
+            throw new IllegalArgumentException("Unsupported Temporal type");
+        }
     }
 
 }

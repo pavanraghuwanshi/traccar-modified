@@ -210,7 +210,7 @@ public class T800xProtocolDecoder extends BaseProtocolDecoder {
                 positions.add(position);
             }
 
-            positions.getLast().addAlarm(alarm);
+            positions.get(positions.size() - 1).addAlarm(alarm);
 
             return positions;
 

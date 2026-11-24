@@ -116,7 +116,7 @@ public class DatabaseStorage extends Storage {
 
     @Override
     public <T> List<Long> addObjects(List<T> entities, Request request) throws StorageException {
-        Class<?> entityClass = entities.getFirst().getClass();
+        Class<?> entityClass = entities.get(0).getClass();
         List<String> columns = request.getColumns().getColumns(entityClass, "get");
         try (QueryBuilder builder = QueryBuilder.create(
                 config, dataSource, objectMapper, formatInsert(entityClass, columns), true)) {
@@ -252,40 +252,35 @@ public class DatabaseStorage extends Storage {
 
     private List<Object> getConditionVariables(Condition genericCondition) {
         List<Object> results = new ArrayList<>();
-        switch (genericCondition) {
-            case null -> {}
-            case Condition.Compare condition -> results.add(condition.getValue());
-            case Condition.Between condition -> {
-                results.add(condition.getFromValue());
-                results.add(condition.getToValue());
-            }
-            case Condition.Binary condition -> {
-                results.addAll(getConditionVariables(condition.getFirst()));
-                results.addAll(getConditionVariables(condition.getSecond()));
-            }
-            case Condition.Contains condition -> {
-                String value = "%" + condition.getValue().toLowerCase(Locale.ROOT) + "%";
-                results.addAll(Collections.nCopies(condition.getColumns().size(), value));
-            }
-            case Condition.Permission condition -> {
-                long conditionId = condition.getOwnerId() > 0 ? condition.getOwnerId() : condition.getPropertyId();
+        if (genericCondition == null) {
+            // null
+        } else if (genericCondition instanceof Condition.Compare condition) {
+            results.add(condition.getValue());
+        } else if (genericCondition instanceof Condition.Between condition) {
+            results.add(condition.getFromValue());
+            results.add(condition.getToValue());
+        } else if (genericCondition instanceof Condition.Binary condition) {
+            results.addAll(getConditionVariables(condition.getFirst()));
+            results.addAll(getConditionVariables(condition.getSecond()));
+        } else if (genericCondition instanceof Condition.Contains condition) {
+            String value = "%" + condition.getValue().toLowerCase(Locale.ROOT) + "%";
+            results.addAll(Collections.nCopies(condition.getColumns().size(), value));
+        } else if (genericCondition instanceof Condition.Permission condition) {
+            long conditionId = condition.getOwnerId() > 0 ? condition.getOwnerId() : condition.getPropertyId();
+            results.add(conditionId);
+            if (condition.getIncludeGroups()) {
                 results.add(conditionId);
-                if (condition.getIncludeGroups()) {
-                    results.add(conditionId);
+            }
+        } else if (genericCondition instanceof Condition.LatestPositions condition) {
+            if (condition.getDeviceId() > 0) {
+                results.add(condition.getDeviceId());
+                results.add(condition.getDeviceId());
+            } else {
+                long period = config.getLong(Keys.DATABASE_POSITION_PERIOD);
+                if (period > 0) {
+                    results.add(new Date(System.currentTimeMillis() - period * 1000));
                 }
             }
-            case Condition.LatestPositions condition -> {
-                if (condition.getDeviceId() > 0) {
-                    results.add(condition.getDeviceId());
-                    results.add(condition.getDeviceId());
-                } else {
-                    long period = config.getLong(Keys.DATABASE_POSITION_PERIOD);
-                    if (period > 0) {
-                        results.add(new Date(System.currentTimeMillis() - period * 1000));
-                    }
-                }
-            }
-            default -> {}
         }
         return results;
     }
