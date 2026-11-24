@@ -406,7 +406,9 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.setTime(parseUtc(value(values, 9), value(values, 10)));
         position.setValid(enabled(value(values, 8)));
         if (position.getValid()) {
-            setCoordinates(position, value(values, 11), value(values, 12), value(values, 13), cleanField(value(values, 14)));
+            setCoordinates(
+                    position, value(values, 11), value(values, 12),
+                    value(values, 13), cleanField(value(values, 14)));
         } else {
             getLastLocation(position, null);
         }
@@ -531,7 +533,8 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
                 if (decoded instanceof Position pos && pos.getAttributes().containsKey(Position.KEY_INDEX)) {
                     int idx = (Integer) pos.getAttributes().get(Position.KEY_INDEX);
                     if (idx > 0) {
-                        channel.writeAndFlush(new NetworkMessage("$ACK," + String.format("%06d", idx) + "*\r\n", remoteAddress));
+                        String ack = "$ACK," + String.format("%06d", idx) + "*\r\n";
+                        channel.writeAndFlush(new NetworkMessage(ack, remoteAddress));
                     } else {
                         channel.writeAndFlush(new NetworkMessage("$ACK*\r\n", remoteAddress));
                     }
