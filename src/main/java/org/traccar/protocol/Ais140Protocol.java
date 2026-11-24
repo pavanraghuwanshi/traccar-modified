@@ -3,8 +3,6 @@
  */
 package org.traccar.protocol;
 
-import io.netty.buffer.Unpooled;
-import io.netty.handler.codec.DelimiterBasedFrameDecoder;
 import io.netty.handler.codec.string.StringDecoder;
 import io.netty.handler.codec.string.StringEncoder;
 import org.traccar.BaseProtocol;
@@ -24,8 +22,7 @@ public class Ais140Protocol extends BaseProtocol {
         addServer(new TrackerServer(config, getName(), false) {
             @Override
             protected void addProtocolHandlers(PipelineBuilder pipeline, Config config) {
-                pipeline.addLast(new DelimiterBasedFrameDecoder(2048,
-                        Unpooled.copiedBuffer("*", StandardCharsets.US_ASCII)));
+                pipeline.addLast(new Ais140FrameDecoder());
                 pipeline.addLast(new StringEncoder(StandardCharsets.US_ASCII));
                 pipeline.addLast(new StringDecoder(StandardCharsets.US_ASCII));
                 pipeline.addLast(new Ais140ProtocolDecoder(Ais140Protocol.this));
