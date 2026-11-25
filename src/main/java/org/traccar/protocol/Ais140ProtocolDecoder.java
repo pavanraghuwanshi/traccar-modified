@@ -107,6 +107,17 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         }
     }
 
+    private double parseOdometer(String odoStr) {
+        if (odoStr == null || odoStr.isBlank()) {
+            return 0;
+        }
+        double val = decimal(odoStr);
+        if (odoStr.contains(".")) {
+            return val * 1000;
+        }
+        return val;
+    }
+
     private Position lastPosition(DeviceSession deviceSession) {
         Position position = new Position(getProtocolName());
         position.setDeviceId(deviceSession.getDeviceId());
@@ -197,7 +208,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
                 position.set(Position.KEY_INDEX, integer(value(values, inputIndex + 2)));
             }
             if (inputIndex + 3 < values.length) {
-                position.set(Position.KEY_ODOMETER, decimal(value(values, inputIndex + 3)) * 1000);
+                position.set(Position.KEY_ODOMETER, parseOdometer(value(values, inputIndex + 3)));
             }
             if (inputIndex + 4 < values.length) {
                 position.set("fenceId", value(values, inputIndex + 4));
@@ -231,7 +242,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
                 position.set(Position.KEY_INDEX, integer(value(values, 48)));
             }
             if (values.length > 49) {
-                position.set(Position.KEY_ODOMETER, decimal(value(values, 49)) * 1000);
+                position.set(Position.KEY_ODOMETER, parseOdometer(value(values, 49)));
             }
             if (values.length > 50) {
                 position.set("fenceId", value(values, 50));
@@ -280,7 +291,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         setCoordinates(position, value(values, 7), value(values, 8), value(values, 9), value(values, 10));
         position.setAltitude(decimal(value(values, 11)));
         position.setSpeed(UnitsConverter.knotsFromKph(decimal(value(values, 12))));
-        position.set(Position.KEY_ODOMETER, decimal(value(values, 13)) * 1000);
+        position.set(Position.KEY_ODOMETER, parseOdometer(value(values, 13)));
         if ("EMR".equals(value(values, 2))) {
             position.set(Position.KEY_ALARM, Position.ALARM_SOS);
         }
@@ -435,10 +446,29 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         position.set("packetStatus", value(values, 3));
         position.set("vehicleRegistration", value(values, 7));
 
-        position.set(Position.KEY_INPUT, value(values, 45));
-        position.set(Position.KEY_OUTPUT, value(values, 46));
-        position.set(Position.KEY_ODOMETER, decimal(value(values, 47)) * 1000);
-        position.set(Position.KEY_INDEX, integer(value(values, 50)));
+        int inputIndex = -1;
+        for (int i = 30; i < values.length - 1; i++) {
+            if (value(values, i).matches("[01]{4}") && value(values, i + 1).matches("[01]{2}")) {
+                inputIndex = i;
+                break;
+            }
+        }
+
+        if (inputIndex >= 0) {
+            position.set(Position.KEY_INPUT, value(values, inputIndex));
+            position.set(Position.KEY_OUTPUT, value(values, inputIndex + 1));
+            if (inputIndex + 2 < values.length) {
+                position.set(Position.KEY_ODOMETER, parseOdometer(value(values, inputIndex + 2)));
+            }
+            if (inputIndex + 5 < values.length) {
+                position.set(Position.KEY_INDEX, integer(value(values, inputIndex + 5)));
+            }
+        } else {
+            position.set(Position.KEY_INPUT, value(values, 45));
+            position.set(Position.KEY_OUTPUT, value(values, 46));
+            position.set(Position.KEY_ODOMETER, parseOdometer(value(values, 47)));
+            position.set(Position.KEY_INDEX, integer(value(values, 50)));
+        }
 
         if (values.length > 51) {
             String fuelAndChecksum = value(values, 51);
