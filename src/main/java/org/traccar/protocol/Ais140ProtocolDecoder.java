@@ -484,6 +484,9 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
     protected Object decode(Channel channel, SocketAddress remoteAddress, Object msg) {
         String message = ((String) msg).trim();
         LOGGER.debug("AIS-140 raw packet from {}: {}", remoteAddress, message);
+        if (message.contains("WRONG COMMAND")) {
+            return null;
+        }
         int start = message.indexOf('$');
         if (start < 0) {
             LOGGER.warn("AIS-140 packet rejected: start character '$' is missing");
@@ -518,12 +521,17 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             case "NMP" -> decodeNmp(channel, remoteAddress, values);
             case "LGN" -> decodeLgn(channel, remoteAddress, values);
             case "HLP" -> decodeHlp(channel, remoteAddress, values);
-            default -> decodeLogin(channel, remoteAddress, values);
+            default -> {
+                if (values.length >= 8) {
+                    yield decodeLogin(channel, remoteAddress, values);
+                }
+                yield null;
+            }
         };
 
-        if (channel != null) {
+        if (channel != null && decoded != null) {
             boolean isLogin = "LGN".equals(header) || (values.length <= 10
-                    && !"HP".equals(header) && !"EPB".equals(header));
+                    && !"HP".equals(header) && !"EPB".equals(header) && !"NMP".equals(header));
             if (isLogin) {
                 SimpleDateFormat dateFormat = new SimpleDateFormat("ddMMyyyyHHmmss");
                 dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
