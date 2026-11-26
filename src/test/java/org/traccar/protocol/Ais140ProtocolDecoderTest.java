@@ -28,7 +28,9 @@ import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class Ais140ProtocolDecoderTest extends ProtocolTest {
@@ -233,5 +235,57 @@ public class Ais140ProtocolDecoderTest extends ProtocolTest {
             bossGroup.shutdownGracefully().sync();
             workerGroup.shutdownGracefully().sync();
         }
+    }
+
+    @Test
+    public void testAsplNmpLgnHlp() throws Exception {
+        var decoder = inject(new Ais140ProtocolDecoder(null));
+        var channel = new EmbeddedChannel(
+                new WrapperInboundHandler(new Ais140FrameDecoder()),
+                new WrapperInboundHandler(new StringDecoder(StandardCharsets.US_ASCII)),
+                decoder
+        );
+
+        String asplStream =
+                "$LGN,ASPL,0,865820071990100,2.1.1,AIS140,19.9638977,N,79.2579193,E*3F\r\n"
+                + "$HLP,ASPL,2.1.1,865820071990100,79,15,34,10,30,010000,00*\r\n"
+                + "$NMP,ASPL,2.1.1,NR,2,H,865820071990100,0,1,26112026,023521,19.9911137,N,79.2525101,E,"
+                + "020.0,312.00,31,182.0,1.1,0.5,Vi India,1,1,13.6,4.1,0,C,24,404,90,0dca,8c0f,17,0dca,"
+                + "a9d7,22,0dca,8c13,x,x,x,x,x,x,1100,00,140943,00.0,00.0,4471,(0,0,0)*15\r\n"
+                + "$NMP,ASPL,2.1.1,NR,1,L,863070047999262,0,1,26112026,023453,20.7332458,N,78.5821838,E,"
+                + "017.1,094.00,31,273.0,1.5,0.7,Airtel,1,1,13.5,2.7,0,C,22,404,90,0c90,10df,15,0c90,"
+                + "e6b2,x,x,x,x,x,x,x,x,x,1000,00,030160,00.0,00.0,1940,(0,0,0)*1B\r\n";
+
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(asplStream, StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+
+        Position lgnPos = channel.readInbound();
+        assertNotNull(lgnPos);
+        assertFalse(lgnPos.getOutdated());
+        assertEquals(19.9638977, lgnPos.getLatitude(), 0.0001);
+        assertEquals(79.2579193, lgnPos.getLongitude(), 0.0001);
+
+        Position hlpPos = channel.readInbound();
+        assertNotNull(hlpPos);
+        assertTrue(hlpPos.getOutdated());
+        assertEquals(79, hlpPos.getAttributes().get(Position.KEY_BATTERY_LEVEL));
+
+        Position nmpHist = channel.readInbound();
+        assertNotNull(nmpHist);
+        assertTrue(Boolean.TRUE.equals(nmpHist.getAttributes().get(Position.KEY_ARCHIVE)));
+        assertEquals(140943, nmpHist.getAttributes().get(Position.KEY_INDEX));
+        assertEquals(4471000.0, nmpHist.getAttributes().get(Position.KEY_ODOMETER));
+        assertEquals("(0,0,0)", nmpHist.getAttributes().get("fuelData"));
+        assertEquals("15", nmpHist.getAttributes().get("checksum"));
+
+        Position nmpLive = channel.readInbound();
+        assertNotNull(nmpLive);
+        assertFalse(nmpLive.getAttributes().containsKey(Position.KEY_ARCHIVE));
+        assertEquals(30160, nmpLive.getAttributes().get(Position.KEY_INDEX));
+        assertEquals(1940000.0, nmpLive.getAttributes().get(Position.KEY_ODOMETER));
+        assertEquals("(0,0,0)", nmpLive.getAttributes().get("fuelData"));
+        assertEquals("1B", nmpLive.getAttributes().get("checksum"));
+
+        assertNull(readNetworkMessage(channel), "ASPL LGN/HLP/NMP should not trigger server replies");
     }
 }

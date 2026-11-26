@@ -46,28 +46,32 @@ public class DistanceHandler extends BasePositionHandler {
         if (position.hasAttribute(Position.KEY_DISTANCE)) {
             distance = position.getDouble(Position.KEY_DISTANCE);
         }
-        double totalDistance;
+        double totalDistance = 0.0;
+        boolean outOfOrder = false;
         Position last = cacheManager.getPosition(position.getDeviceId());
         if (last != null) {
             totalDistance = last.getDouble(Position.KEY_TOTAL_DISTANCE);
-            if (!position.hasAttribute(Position.KEY_DISTANCE)) {
-                distance = DistanceCalculator.distance(position, last);
-            }
-            if (filter && last.getLatitude() != 0 && last.getLongitude() != 0) {
-                boolean satisfiesMin = minError == 0 || distance > minError;
-                boolean satisfiesMax = maxError == 0 || distance < maxError;
-                if (!satisfiesMin || !satisfiesMax) {
-                    position.setValid(last.getValid());
-                    position.setLatitude(last.getLatitude());
-                    position.setLongitude(last.getLongitude());
-                    distance = 0;
+            outOfOrder = position.getFixTime() != null
+                    && last.getFixTime() != null
+                    && position.getFixTime().before(last.getFixTime());
+            if (!outOfOrder) {
+                if (!position.hasAttribute(Position.KEY_DISTANCE)) {
+                    distance = DistanceCalculator.distance(position, last);
+                }
+                if (filter && last.getLatitude() != 0 && last.getLongitude() != 0) {
+                    boolean satisfiesMin = minError == 0 || distance > minError;
+                    boolean satisfiesMax = maxError == 0 || distance < maxError;
+                    if (!satisfiesMin || !satisfiesMax) {
+                        position.setValid(last.getValid());
+                        position.setLatitude(last.getLatitude());
+                        position.setLongitude(last.getLongitude());
+                        distance = 0;
+                    }
                 }
             }
-        } else {
-            totalDistance = 0.0;
         }
         position.set(Position.KEY_DISTANCE, distance);
-        position.set(Position.KEY_TOTAL_DISTANCE, totalDistance + distance);
+        position.set(Position.KEY_TOTAL_DISTANCE, outOfOrder ? totalDistance : totalDistance + distance);
 
         callback.processed(false);
     }

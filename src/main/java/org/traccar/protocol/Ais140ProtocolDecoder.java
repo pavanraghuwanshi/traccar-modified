@@ -16,6 +16,7 @@ import org.traccar.session.DeviceSession;
 import java.net.SocketAddress;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -342,7 +343,8 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", imei);
             return null;
         }
-        Position position = lastPosition(deviceSession);
+        Position position = new Position(getProtocolName());
+        position.setDeviceId(deviceSession.getDeviceId());
         position.setTime(new Date());
         position.setValid(true);
         position.set("vehicleRegistration", value(values, 1));
@@ -391,7 +393,8 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             LOGGER.warn("AIS-140 login rejected: device not found for IMEI {}", imei);
             return null;
         }
-        Position position = lastPosition(deviceSession);
+        Position position = new Position(getProtocolName());
+        position.setDeviceId(deviceSession.getDeviceId());
         position.setTime(new Date());
         position.setValid(true);
         position.set("vehicleRegistration", value(values, 2));
@@ -444,6 +447,9 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
 
         position.set(Position.KEY_ALARM, ALARMS.get(value(values, 4)));
         position.set("packetStatus", value(values, 3));
+        if ("H".equalsIgnoreCase(value(values, 5))) {
+            position.set(Position.KEY_ARCHIVE, true);
+        }
         position.set("vehicleRegistration", value(values, 7));
 
         int inputIndex = -1;
@@ -458,25 +464,37 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
             position.set(Position.KEY_INPUT, value(values, inputIndex));
             position.set(Position.KEY_OUTPUT, value(values, inputIndex + 1));
             if (inputIndex + 2 < values.length) {
-                position.set(Position.KEY_ODOMETER, parseOdometer(value(values, inputIndex + 2)));
+                position.set(Position.KEY_INDEX, integer(value(values, inputIndex + 2)));
+            }
+            if (inputIndex + 3 < values.length) {
+                position.set(Position.PREFIX_ADC + 1, decimal(value(values, inputIndex + 3)));
+            }
+            if (inputIndex + 4 < values.length) {
+                position.set(Position.PREFIX_ADC + 2, decimal(value(values, inputIndex + 4)));
             }
             if (inputIndex + 5 < values.length) {
-                position.set(Position.KEY_INDEX, integer(value(values, inputIndex + 5)));
+                position.set(Position.KEY_ODOMETER, decimal(value(values, inputIndex + 5)) * 1000);
             }
         } else {
             position.set(Position.KEY_INPUT, value(values, 45));
             position.set(Position.KEY_OUTPUT, value(values, 46));
-            position.set(Position.KEY_ODOMETER, parseOdometer(value(values, 47)));
-            position.set(Position.KEY_INDEX, integer(value(values, 50)));
+            position.set(Position.KEY_INDEX, integer(value(values, 47)));
+            position.set(Position.PREFIX_ADC + 1, decimal(value(values, 48)));
+            position.set(Position.PREFIX_ADC + 2, decimal(value(values, 49)));
+            position.set(Position.KEY_ODOMETER, decimal(value(values, 50)) * 1000);
         }
 
-        if (values.length > 51) {
-            String fuelAndChecksum = value(values, 51);
-            if (fuelAndChecksum.contains("*")) {
-                position.set("fuelData", fuelAndChecksum.substring(0, fuelAndChecksum.indexOf('*')).trim());
-                position.set("checksum", fuelAndChecksum.substring(fuelAndChecksum.indexOf('*') + 1).trim());
+        int fuelStart = inputIndex >= 0 ? inputIndex + 6 : 51;
+        if (values.length > fuelStart) {
+            String tail = String.join(",", Arrays.copyOfRange(values, fuelStart, values.length));
+            if (tail.contains("*")) {
+                position.set("fuelData", tail.substring(0, tail.indexOf('*')).trim());
+                String chk = tail.substring(tail.indexOf('*') + 1).trim();
+                if (!chk.isBlank()) {
+                    position.set("checksum", chk);
+                }
             } else {
-                position.set("fuelData", fuelAndChecksum.trim());
+                position.set("fuelData", tail.trim());
             }
         }
         return position;
@@ -560,8 +578,12 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
         };
 
         if (channel != null && decoded != null) {
-            boolean isLogin = "LGN".equals(header) || (values.length <= 10
-                    && !"HP".equals(header) && !"EPB".equals(header) && !"NMP".equals(header));
+            boolean isAspl = "ASPL".equalsIgnoreCase(value(values, 1))
+                    || "ASPL".equalsIgnoreCase(value(values, 2));
+            boolean isCommaDelimitedLogin = values.length <= 10
+                    && !"LGN".equals(header) && !"HP".equals(header)
+                    && !"HLP".equals(header) && !"EPB".equals(header) && !"NMP".equals(header);
+            boolean isLogin = isCommaDelimitedLogin || ("LGN".equals(header) && !isAspl);
             if (isLogin) {
                 SimpleDateFormat dateFormat = new SimpleDateFormat("ddMMyyyyHHmmss");
                 dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"));
@@ -579,7 +601,7 @@ public class Ais140ProtocolDecoder extends BaseProtocolDecoder {
                 } else {
                     channel.writeAndFlush(new NetworkMessage("$ACK*\r\n", remoteAddress));
                 }
-            } else if ("HP".equals(header) || "HLP".equals(header)) {
+            } else if ("HP".equals(header) || ("HLP".equals(header) && !isAspl)) {
                 channel.writeAndFlush(new NetworkMessage("$ACK*\r\n", remoteAddress));
             }
         }
