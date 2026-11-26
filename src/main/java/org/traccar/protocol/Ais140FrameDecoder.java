@@ -25,59 +25,146 @@ public class Ais140FrameDecoder extends BaseFrameDecoder {
 
     private static final int MINIMUM_LENGTH = 15;
 
-    private ByteBuf readFrame(ByteBuf buf, int delimiterIndex, int skip) {
-        int headerIndex = buf.indexOf(buf.readerIndex() + 1, buf.writerIndex(), (byte) '$');
-        if (headerIndex > 0 && headerIndex < delimiterIndex) {
-            return buf.readRetainedSlice(headerIndex - buf.readerIndex());
-        } else {
-            ByteBuf frame = buf.readRetainedSlice(delimiterIndex - buf.readerIndex());
-            buf.skipBytes(skip);
-            return frame;
+    private static boolean isHexDigit(byte b) {
+        return (b >= '0' && b <= '9')
+                || (b >= 'A' && b <= 'F')
+                || (b >= 'a' && b <= 'f');
+    }
+
+    private ByteBuf sliceOrSkip(ByteBuf buf, int start, int end, int skip) {
+        int length = end - start;
+        if (length < MINIMUM_LENGTH) {
+            buf.readerIndex(end + skip);
+            return null;
         }
+        ByteBuf frame = buf.readRetainedSlice(length);
+        buf.skipBytes(skip);
+        return frame;
     }
 
     @Override
     protected Object decode(
             ChannelHandlerContext ctx, Channel channel, ByteBuf buf) throws Exception {
 
-        while (buf.isReadable() && buf.getByte(buf.readerIndex()) != '$') {
-            buf.skipBytes(1);
-        }
+        while (buf.isReadable()) {
+            while (buf.isReadable() && buf.getByte(buf.readerIndex()) != '$') {
+                buf.skipBytes(1);
+            }
 
-        if (buf.readableBytes() < MINIMUM_LENGTH) {
+            if (!buf.isReadable()) {
+                return null;
+            }
+
+            int start = buf.readerIndex();
+            int writer = buf.writerIndex();
+
+            int crlf = BufferUtil.indexOf("\r\n", buf, start, writer);
+            int lf = buf.indexOf(start, writer, (byte) '\n');
+            int amp = BufferUtil.indexOf("&&", buf, start, writer);
+            int nextDollar = buf.indexOf(start + 1, writer, (byte) '$');
+            if (nextDollar > start && nextDollar + 1 < writer && buf.getByte(nextDollar + 1) == '*') {
+                nextDollar = buf.indexOf(nextDollar + 1, writer, (byte) '$');
+            }
+
+            int bestEnd = -1;
+            int skip = 0;
+
+            if (crlf >= 0) {
+                bestEnd = crlf;
+                skip = 2;
+            }
+            if (lf >= 0 && (bestEnd < 0 || lf < bestEnd)) {
+                bestEnd = lf;
+                skip = 1;
+            }
+            if (amp >= 0 && (bestEnd < 0 || amp < bestEnd)) {
+                bestEnd = amp;
+                skip = 2;
+            }
+            if (nextDollar > start && (bestEnd < 0 || nextDollar < bestEnd)) {
+                bestEnd = nextDollar;
+                skip = 0;
+            }
+
+            if (bestEnd >= 0) {
+                ByteBuf frame = sliceOrSkip(buf, start, bestEnd, skip);
+                if (frame != null) {
+                    return frame;
+                }
+                continue;
+            }
+
+            int searchFrom = start;
+            while (searchFrom < writer) {
+                int star = buf.indexOf(searchFrom, writer, (byte) '*');
+                if (star < 0) {
+                    break;
+                }
+                int afterStar = writer - (star + 1);
+                if (afterStar == 0) {
+                    if (star - start >= 2 && buf.getByte(star - 2) == ',') {
+                        byte prev = buf.getByte(star - 1);
+                        if (prev < 0x20 || prev >= 0x7F) {
+                            ByteBuf frame = sliceOrSkip(buf, start, star - 1, 2);
+                            if (frame != null) {
+                                return frame;
+                            }
+                            break;
+                        }
+                    }
+                    ByteBuf frame = sliceOrSkip(buf, start, writer, 0);
+                    if (frame != null) {
+                        return frame;
+                    }
+                    break;
+                }
+
+                byte b1 = buf.getByte(star + 1);
+                if (b1 == '*') {
+                    if (afterStar == 1) {
+                        ByteBuf frame = sliceOrSkip(buf, start, writer, 0);
+                        if (frame != null) {
+                            return frame;
+                        }
+                        break;
+                    }
+                    if (afterStar == 2 && buf.getByte(star + 2) == '\r') {
+                        ByteBuf frame = sliceOrSkip(buf, start, star + 2, 1);
+                        if (frame != null) {
+                            return frame;
+                        }
+                        break;
+                    }
+                } else if (b1 == '\r' && afterStar == 1) {
+                    ByteBuf frame = sliceOrSkip(buf, start, star + 1, 1);
+                    if (frame != null) {
+                        return frame;
+                    }
+                    break;
+                } else if (afterStar == 1 && isHexDigit(b1)) {
+                    // Wait for the second checksum hex digit or newline to avoid splitting *XX.
+                    return null;
+                } else if (afterStar >= 2 && isHexDigit(b1) && isHexDigit(buf.getByte(star + 2))) {
+                    if (afterStar == 2) {
+                        ByteBuf frame = sliceOrSkip(buf, start, writer, 0);
+                        if (frame != null) {
+                            return frame;
+                        }
+                        break;
+                    }
+                    if (afterStar == 3 && buf.getByte(star + 3) == '\r') {
+                        ByteBuf frame = sliceOrSkip(buf, start, star + 3, 1);
+                        if (frame != null) {
+                            return frame;
+                        }
+                        break;
+                    }
+                }
+
+                searchFrom = star + 1;
+            }
+
             return null;
-        }
-
-        int delimiterIndex = BufferUtil.indexOf("\r\n", buf);
-        if (delimiterIndex >= 0 && (delimiterIndex - buf.readerIndex()) >= MINIMUM_LENGTH) {
-            return readFrame(buf, delimiterIndex, 2);
-        }
-
-        delimiterIndex = buf.indexOf(buf.readerIndex(), buf.writerIndex(), (byte) '\n');
-        if (delimiterIndex >= 0 && (delimiterIndex - buf.readerIndex()) >= MINIMUM_LENGTH) {
-            return readFrame(buf, delimiterIndex, 1);
-        }
-
-        delimiterIndex = buf.indexOf(buf.readerIndex(), buf.writerIndex(), (byte) '*');
-        if (delimiterIndex >= 0 && (delimiterIndex - buf.readerIndex()) >= MINIMUM_LENGTH) {
-            int headerIndex = buf.indexOf(buf.readerIndex() + 1, buf.writerIndex(), (byte) '$');
-            if (headerIndex > 0 && headerIndex < delimiterIndex) {
-                return buf.readRetainedSlice(headerIndex - buf.readerIndex());
-            }
-
-            if (buf.writerIndex() > delimiterIndex + 1 && buf.getByte(delimiterIndex + 1) == '*') {
-                delimiterIndex += 1;
-            }
-            if (delimiterIndex - buf.readerIndex() >= 2 && buf.getByte(delimiterIndex - 2) == ',') {
-                return readFrame(buf, delimiterIndex - 1, 2); // skip binary checksum
-            } else {
-                return readFrame(buf, delimiterIndex, 1);
-            }
-        }
-
-        int headerIndex = buf.indexOf(buf.readerIndex() + 1, buf.writerIndex(), (byte) '$');
-        if (headerIndex > 0 && (headerIndex - buf.readerIndex()) >= MINIMUM_LENGTH) {
-            return buf.readRetainedSlice(headerIndex - buf.readerIndex());
         }
 
         return null;

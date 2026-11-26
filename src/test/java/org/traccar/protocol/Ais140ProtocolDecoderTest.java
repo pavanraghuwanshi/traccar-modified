@@ -16,8 +16,12 @@ import org.traccar.NetworkMessage;
 import org.traccar.ProtocolTest;
 import org.traccar.WrapperInboundHandler;
 import org.traccar.WrapperOutboundHandler;
+import org.traccar.config.Config;
+import org.traccar.config.Keys;
 import org.traccar.handler.network.NetworkMessageHandler;
+import org.traccar.model.Device;
 import org.traccar.model.Position;
+import org.traccar.session.cache.CacheManager;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -26,12 +30,19 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Map;
+import java.util.TimeZone;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class Ais140ProtocolDecoderTest extends ProtocolTest {
 
@@ -287,5 +298,235 @@ public class Ais140ProtocolDecoderTest extends ProtocolTest {
         assertEquals("1B", nmpLive.getAttributes().get("checksum"));
 
         assertNull(readNetworkMessage(channel), "ASPL LGN/HLP/NMP should not trigger server replies");
+    }
+
+    @Test
+    public void testLiveCom3NmpInvalidGpsAndNetworkTowers() throws Exception {
+        var decoder = inject(new Ais140ProtocolDecoder(null));
+        var channel = new EmbeddedChannel(
+                new WrapperInboundHandler(new Ais140FrameDecoder()),
+                new WrapperInboundHandler(new StringDecoder(StandardCharsets.US_ASCII)),
+                decoder
+        );
+
+        String com3Packet = "$NMP,ASPL,2.1.1,NR,1,L,863070045877510,0,0,01011970,000000,"
+                + "00.0000000,N,00.0000000,E,000.0,000.00,00,0.0,0.0,0.0,Airtel,0,1,11.9,3.4,0,O,18,"
+                + "404,90,158a,e25e,15,1585,6366,11,1585,9eb8,10,158a,e263,13,158a,e267,"
+                + "0000,00,818981,00.0,00.0,20929,(0,0,0)*02\r\r\n";
+
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(com3Packet, StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+
+        Position pos = channel.readInbound();
+        assertNotNull(pos);
+        assertFalse(pos.getValid());
+        assertFalse(pos.getOutdated());
+        assertEquals(0L, pos.getFixTime().getTime());
+        assertEquals(0.0, pos.getLatitude(), 0.0001);
+        assertEquals(0.0, pos.getLongitude(), 0.0001);
+        assertNotNull(pos.getNetwork());
+        assertEquals(5, pos.getNetwork().getCellTowers().size());
+        assertEquals(11.9, pos.getAttributes().get(Position.KEY_POWER));
+        assertEquals(3.4, pos.getAttributes().get(Position.KEY_BATTERY));
+        assertEquals(818981, pos.getAttributes().get(Position.KEY_INDEX));
+        assertEquals(20929000.0, pos.getAttributes().get(Position.KEY_ODOMETER));
+        assertEquals("02", pos.getAttributes().get("checksum"));
+        assertNull(readNetworkMessage(channel));
+    }
+
+    @Test
+    public void testAsplNmpAlarmHlpOutputAndTowerHexScan() throws Exception {
+        var decoder = inject(new Ais140ProtocolDecoder(null));
+        var channel = new EmbeddedChannel(
+                new WrapperInboundHandler(new Ais140FrameDecoder()),
+                new WrapperInboundHandler(new StringDecoder(StandardCharsets.US_ASCII)),
+                decoder
+        );
+
+        String tamperPacket = "$NMP,ASPL,2.1.1,TA,16,H,863070047999262,0,0,26112026,021630,"
+                + "00.0000000,N,00.0000000,E,000.0,000.00,00,0.0,0.0,0.0,Airtel,1,1,13.5,0.0,0,C,0,"
+                + "x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x,1000,00,030123,00.0,00.0,1937,(0,0,0)*52\r\n";
+        String hlpPacket = "$HLP,ASPL,2.1.1,863070047999262,0,15,0,30,60,100000,00*\r\n";
+        String hexCollisionNmp = "$NMP,ASPL,2.1.1,NR,1,L,863070047999262,0,1,26112026,021752,"
+                + "20.7414360,N,78.5699463,E,000.0,000.00,08,233.0,2.6,1.1,Airtel,1,1,13.5,0.0,0,C,18,"
+                + "404,90,0c90,5c78,15,0c90,1010,11,0c90,1633,09,0c90,d010,12,0c90,f139,"
+                + "2000,00,030126,12.5,04.2,1937,(0,0,0)*6A\r\n";
+
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(tamperPacket + hlpPacket + hexCollisionNmp, StandardCharsets.US_ASCII),
+                REMOTE_ADDRESS));
+
+        Position taPos = channel.readInbound();
+        assertNotNull(taPos);
+        assertEquals(Position.ALARM_TAMPERING, taPos.getAttributes().get(Position.KEY_ALARM));
+        assertTrue(Boolean.TRUE.equals(taPos.getAttributes().get(Position.KEY_ARCHIVE)));
+        assertFalse(taPos.getValid());
+        assertFalse(taPos.getOutdated());
+        SimpleDateFormat fmt = new SimpleDateFormat("ddMMyyyyHHmmss");
+        fmt.setTimeZone(TimeZone.getTimeZone("UTC"));
+        assertEquals("26112026021630", fmt.format(taPos.getFixTime()));
+        assertNull(taPos.getNetwork());
+        assertEquals(30123, taPos.getAttributes().get(Position.KEY_INDEX));
+        assertEquals(1937000.0, taPos.getAttributes().get(Position.KEY_ODOMETER));
+
+        Position hlpPos = channel.readInbound();
+        assertNotNull(hlpPos);
+        assertTrue(hlpPos.getOutdated());
+        assertEquals("100000", hlpPos.getAttributes().get(Position.KEY_INPUT));
+        assertEquals("00", hlpPos.getAttributes().get(Position.KEY_OUTPUT));
+        assertFalse(hlpPos.hasAttribute(Position.KEY_POWER));
+
+        Position hexPos = channel.readInbound();
+        assertNotNull(hexPos);
+        assertEquals("2000", hexPos.getAttributes().get(Position.KEY_INPUT));
+        assertEquals("00", hexPos.getAttributes().get(Position.KEY_OUTPUT));
+        assertEquals(30126, hexPos.getAttributes().get(Position.KEY_INDEX));
+        assertEquals(12.5, hexPos.getAttributes().get(Position.PREFIX_ADC + 1));
+        assertEquals(4.2, hexPos.getAttributes().get(Position.PREFIX_ADC + 2));
+        assertEquals(1937000.0, hexPos.getAttributes().get(Position.KEY_ODOMETER));
+        assertNotNull(hexPos.getNetwork());
+        assertEquals(5, hexPos.getNetwork().getCellTowers().size());
+        assertNull(readNetworkMessage(channel));
+    }
+
+    @Test
+    public void testFrameDecoderShortFramesAmpersandAndFragmentedChecksum() throws Exception {
+        var decoder = inject(new Ais140ProtocolDecoder(null));
+        var channel = new EmbeddedChannel(
+                new WrapperInboundHandler(new Ais140FrameDecoder()),
+                new WrapperInboundHandler(new StringDecoder(StandardCharsets.US_ASCII)),
+                decoder
+        );
+
+        // Standalone && frame must be consumed immediately and dropped without reply
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer("$863070047999262,WRONG COMMAND&&", StandardCharsets.US_ASCII),
+                REMOTE_ADDRESS));
+        assertNull(channel.readInbound());
+        assertNull(readNetworkMessage(channel));
+
+        // 150 short <15B frames must not wedge or trigger TooLongFrameException (>1024B)
+        StringBuilder shortBurst = new StringBuilder();
+        for (int i = 0; i < 150; i++) {
+            shortBurst.append("$HBT*1A\r\n");
+        }
+        shortBurst.append("$ACK*\r\n$OK&&");
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(shortBurst.toString(), StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        assertNull(channel.readInbound());
+
+        // Fragmented *6 + A\r\n and *6A + \r\n must preserve checksum
+        String nmpBody = "$NMP,ASPL,2.1.1,NR,1,L,863070047999262,0,1,26112026,021752,"
+                + "20.7414360,N,78.5699463,E,000.0,000.00,08,233.0,2.6,1.1,Airtel,1,1,13.5,0.0,0,C,18,"
+                + "404,90,0c90,5c78,15,0c90,1355,11,0c90,1633,09,0c90,d010,12,0c90,f139,"
+                + "1000,00,030126,00.0,00.0,1937,(0,0,0)";
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(nmpBody + "*6", StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        assertNull(channel.readInbound());
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer("A\r\n", StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        Position frag1 = channel.readInbound();
+        assertNotNull(frag1);
+        assertEquals("6A", frag1.getAttributes().get("checksum"));
+
+        // Trailing *XX without \r\n must preserve checksum, and leftover \r\n must be skipped cleanly
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(nmpBody + "*3E", StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        Position frag2 = channel.readInbound();
+        assertNotNull(frag2);
+        assertEquals("3E", frag2.getAttributes().get("checksum"));
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer("\r\n", StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        assertNull(channel.readInbound());
+
+        // Trailing $...* without \r\n and ,?* without stripping '?'
+        String hlpTrailing = "$HLP,ASPL,2.1.1,863070047999262,75,15,0,30,60,100000,00*";
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(hlpTrailing, StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        Position hlpPos = channel.readInbound();
+        assertNotNull(hlpPos);
+        assertEquals(75, hlpPos.getAttributes().get(Position.KEY_BATTERY_LEVEL));
+
+        String cpQuestionStar = "$,CP,ASPL,V1.1.1,IN,07,L,864495039252728,DL1RQ2455,1,21082018,102209,"
+                + "28.359692,N,76.927437,E,0.0,36.00,8,269.0,1.2,1.7,Airtel,1,1,12.2,4.0,0,C,25,"
+                + "404,10,209,c342,6d17,209,24,d2fb,209,20,d2fc,209,19,c344,209,19,0111,00,"
+                + "002165,125.4,A,t=25 N=12.5,?*";
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(cpQuestionStar, StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        Position cpPos = channel.readInbound();
+        assertNotNull(cpPos);
+        assertEquals("t=25 N=12.5", cpPos.getAttributes().get("fuelData"));
+        assertFalse(cpPos.getAttributes().containsKey("checksum"));
+    }
+
+    @Test
+    public void testUnhandledHeadersBadCoordsEpbDateAndTimezone() throws Exception {
+        var decoder = inject(new Ais140ProtocolDecoder(null));
+        var channel = new EmbeddedChannel(
+                new WrapperInboundHandler(new Ais140FrameDecoder()),
+                new WrapperInboundHandler(new StringDecoder(StandardCharsets.US_ASCII)),
+                decoder
+        );
+
+        // Unhandled >=8-field packets ($PVT, $,01) must not crash or trigger $LGN reply
+        String pvtPacket = "$PVT,ASPL,2.1.1,NR,01,L,DL1RQ2455,863070047999262,1,26112026,021752,"
+                + "20.7414360,N,78.5699463,E*\r\n";
+        String numberedPacket = "$,01,ASPL,2.1.1,NR,01,L,863070047999262,DL1RQ2455,1,26112026,021752,"
+                + "20.7414360,N,78.5699463,E*\r\n";
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(pvtPacket + numberedPacket, StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        assertNull(channel.readInbound());
+        assertNull(readNetworkMessage(channel));
+
+        // DDMM.MMMM / out-of-range coordinates must not throw IllegalArgumentException
+        String badCoordsNmp = "$NMP,ASPL,2.1.1,NR,1,L,863070047999262,0,1,26112026,021752,"
+                + "2044.4861,N,07834.1967,E,000.0,000.00,08,233.0,2.6,1.1,Airtel,1,1,13.5,0.0,0,C,18,"
+                + "404,90,0c90,5c78,1000,00,030126,00.0,00.0,1937,(0,0,0)*6A\r\n";
+        channel.writeInbound(new NetworkMessage(
+                Unpooled.copiedBuffer(badCoordsNmp, StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        Position badCoordPos = channel.readInbound();
+        assertNotNull(badCoordPos);
+        assertFalse(badCoordPos.getValid());
+
+        // 9-field $LGN without trailing hemisphere rejected; 9-field no-vendor $LGN decoded safely
+        assertNull(decoder.decode(null, REMOTE_ADDRESS,
+                "$LGN,ASPL,0,863070047999262,2.1.1,AIS140,20.7414570,N,78.5699921"));
+        Position noVendorLgn = (Position) decoder.decode(null, REMOTE_ADDRESS,
+                "$LGN,DL1RQ2455,863070047999262,2.1.1,AIS140,20.7414570,N,78.5699921,E*36");
+        assertNotNull(noVendorLgn);
+        assertEquals(20.7414570, noVendorLgn.getLatitude(), 0.0001);
+        assertEquals(78.5699921, noVendorLgn.getLongitude(), 0.0001);
+
+        // EPB with invalid date sets non-null fixTime; ASPL EPB sends no ACK
+        channel.writeInbound(new NetworkMessage(Unpooled.copiedBuffer(
+                "$EPB,ASPL,EMR,863070047999262,NM,INVALID,A,20.7414,N,78.5699,E,233,0.0,0.00,G,DL1RQ2455,0*3E\r\n",
+                StandardCharsets.US_ASCII), REMOTE_ADDRESS));
+        Position epbPos = channel.readInbound();
+        assertNotNull(epbPos);
+        assertNotNull(epbPos.getFixTime());
+        assertTrue(epbPos.getValid());
+        assertEquals(20.7414, epbPos.getLatitude(), 0.0001);
+        assertEquals(78.5699, epbPos.getLongitude(), 0.0001);
+        assertEquals(Position.ALARM_SOS, epbPos.getAttributes().get(Position.KEY_ALARM));
+        assertNull(readNetworkMessage(channel));
+
+        // DECODER_TIMEZONE honored by parseDateTime
+        var istDecoder = inject(new Ais140ProtocolDecoder(null));
+        var device = mock(Device.class);
+        when(device.getId()).thenReturn(1L);
+        when(device.getAttributes()).thenReturn(Map.of(Keys.DECODER_TIMEZONE.getKey(), "Asia/Kolkata"));
+        var cacheManager = mock(CacheManager.class);
+        when(cacheManager.getConfig()).thenReturn(new Config());
+        when(cacheManager.getObject(eq(Device.class), anyLong())).thenReturn(device);
+        istDecoder.setCacheManager(cacheManager);
+
+        Position istPos = (Position) istDecoder.decode(null, REMOTE_ADDRESS,
+                "$NMP,ASPL,2.1.1,NR,1,L,863070047999262,0,1,26112026,080521,"
+                + "20.7414360,N,78.5699463,E,000.0,000.00,08,233.0,2.6,1.1,Airtel,1,1,13.5,0.0,0,C,18,"
+                + "404,90,0c90,5c78,1000,00,030126,00.0,00.0,1937,(0,0,0)*6A");
+        assertNotNull(istPos);
+        SimpleDateFormat utcFmt = new SimpleDateFormat("ddMMyyyyHHmmss");
+        utcFmt.setTimeZone(TimeZone.getTimeZone("UTC"));
+        assertEquals("26112026023521", utcFmt.format(istPos.getFixTime()));
     }
 }
